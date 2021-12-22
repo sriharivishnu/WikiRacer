@@ -1,16 +1,15 @@
-from typing import List, Optional, Set
-from attr import dataclass
+import logging
+import time
+import configparser
+import random as rand
+
 import scrapy
 import spacy
-import time
-
-import logging
-
 import requests
 
-import configparser
 
-import random as rand
+from typing import List, Optional, Set
+from attr import dataclass
 from heapq import heappush, heappop
 
 from scrapy.crawler import CrawlerProcess
@@ -41,7 +40,8 @@ class Config:
     max number of random links to follow per page
     if r_max is 0, then no random links will be followed
     This introduces noise into the search space, and
-    can help to escape page loops
+    can help to escape page loops. However, performance
+    is impacted with random links
     """
     r_max: int = 0
 
@@ -161,6 +161,8 @@ class WikiRacer(scrapy.Spider):
         "SCHEDULER_MEMORY_QUEUE": "scrapy.squeues.FifoMemoryQueue",
     }
 
+    found: bool = False
+
     def __init__(self, start: str, target: str, config: Config = Config(), **kwargs):
         super().__init__(self.name, **kwargs)
         self.START = start
@@ -176,6 +178,8 @@ class WikiRacer(scrapy.Spider):
             self.driver = webdriver.Chrome(ChromeDriverManager().install())
 
     def parse(self, response):
+        if WikiRacer.found:
+            return
 
         print("Processing: " + response.request.url.split("/")[-1])
 
@@ -190,17 +194,19 @@ class WikiRacer(scrapy.Spider):
         r = []
 
         # get all links according to css selector
-        for a in response.css(".mw-parser-output > p > a::attr(href)").extract():
+        for a in response.css(self.config.CSS_LINK_EXTRACTOR).extract():
             # clean up link title
             raw_title = a.split("/")[-1]
             title = raw_title.replace("_", " ")
 
             # check if we have reached the target
             if raw_title.lower().strip() == self.TARGET.lower().strip():
-                logging.info(f"Found {self.TARGET} at {response.request.url}")
+                print(f"Found {self.TARGET} at {response.request.url}")
 
                 if hasattr(self, "driver") and self.driver is not None:
                     self.driver.get(self.config.WIKIPEDIA_URL + a)
+
+                WikiRacer.found = True
 
                 # Reached destination. We can stop crawling.
                 raise scrapy.exceptions.CloseSpider(
@@ -239,7 +245,9 @@ class WikiRacer(scrapy.Spider):
         for y in r:
             heap.append(y)
 
-        # follow all links in the heap
+        # follow all links in the heap. These are the
+        # k most similar links to the target plus
+        # any random links that were added
         for item in heap:
             self.visited_urls.add(item[1])
             yield scrapy.Request(self.config.WIKIPEDIA_URL + item[1], self.parse)
@@ -280,9 +288,16 @@ if __name__ == "__main__":
     process.start()
     logger.info("Crawler finished.")
 
+    if not WikiRacer.found:
+        print("Could not find the target word.")
+
+    else:
+        print("Successfully found the target word.")
+
     # sleep for a few seconds to see the final web page :)
     # before closing it
     time.sleep(5)
 
+    # close the web driver if needed
     if WikiRacer.driver:
         WikiRacer.driver.quit()
