@@ -33,7 +33,8 @@ class Config:
     """
     k: max number of links to follow on page.
     This takes the top k similar links and follows them
-    A large k may impact performance
+    A large k may impact performance since more links are followed,
+    but could also improve since it has multiple possible paths to follow
     """
 
     k: int = 1
@@ -54,10 +55,10 @@ class Config:
     r_replacement: float = 0.005
 
     """
-    Can override Wikipedia URL to support
+    Can override Wikipedia domain to support
     other languages.
     """
-    WIKIPEDIA_URL: str = "https://en.wikipedia.org"
+    WIKIPEDIA_DOMAIN: str = "en.wikipedia.org"
 
     """
     Flag to indicate whether to open a chrome browser
@@ -94,7 +95,11 @@ class Config:
         self.r_replacement = config["DEFAULT"].getboolean(
             "r_replacement", self.r_replacement
         )
-        self.WIKIPEDIA_URL = config["DEFAULT"].get("wikipedia_url", self.WIKIPEDIA_URL)
+        self.WIKIPEDIA_DOMAIN = config["DEFAULT"].get(
+            "wikipedia_domain", self.WIKIPEDIA_DOMAIN
+        )
+        self.WIKIPEDIA_URL = f"https://{self.WIKIPEDIA_DOMAIN}"
+
         self.UI = config["DEFAULT"].getboolean("ui", self.UI)
         self.NLP_MODEL = config["DEFAULT"].get("nlp_model", self.NLP_MODEL)
         self.CSS_LINK_EXTRACTOR = config["DEFAULT"].get(
@@ -170,6 +175,7 @@ class WikiRacer(scrapy.Spider):
         self.START = start
         self.TARGET = target
         self.start_urls = [config.WIKIPEDIA_URL + "/wiki/" + self.START]
+        self.allowed_domains = [config.WIKIPEDIA_DOMAIN]
 
         self.config = config
         self.nlp = spacy.load(config.NLP_MODEL)
