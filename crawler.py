@@ -2,12 +2,14 @@ import logging
 import time
 import configparser
 import random as rand
+from urllib.parse import unquote
 
 import scrapy
 import spacy
 import requests
 
 
+from difflib import SequenceMatcher
 from typing import List, Optional, Set
 from attr import dataclass
 from heapq import heappush, heappop
@@ -49,7 +51,7 @@ class Config:
     The probability of a link to be followed
     if randomly chosen
     """
-    r_replacement: float = 0.05
+    r_replacement: float = 0.005
 
     """
     Can override Wikipedia URL to support
@@ -171,7 +173,19 @@ class WikiRacer(scrapy.Spider):
 
         self.config = config
         self.nlp = spacy.load(config.NLP_MODEL)
-        self.target = self.nlp(self.TARGET)
+
+        # remove special characters + URL encoding
+        t = target.replace("_", " ")
+        t = unquote(t)
+
+        temp_t = []
+        for c in t:
+            if c.isalnum() or c == " ":
+                temp_t.append(c)
+        t = "".join(temp_t)
+
+        self.target_token = self.nlp(t)
+
         self.custom_settings["LOG_FILE"] = config.LOG_FILE
 
         if config.UI:
@@ -191,13 +205,16 @@ class WikiRacer(scrapy.Spider):
 
         # maintain min heap of k most similar words
         heap = []
+
+        # randomly chosen links if applicable
         r = []
 
         # get all links according to css selector
         for a in response.css(self.config.CSS_LINK_EXTRACTOR).extract():
-            # clean up link title
+            if not a.startswith("/wiki/"):
+                continue
+
             raw_title = a.split("/")[-1]
-            title = raw_title.replace("_", " ")
 
             # check if we have reached the target
             if raw_title.lower().strip() == self.TARGET.lower().strip():
@@ -217,11 +234,19 @@ class WikiRacer(scrapy.Spider):
             if a in WikiRacer.visited_urls:
                 continue
 
-            if any(x in "?#%&" for x in a):
+            if any(x in "?#&" for x in a):
                 continue
 
+            clean_title = raw_title.replace("_", " ")
+            clean_title = unquote(clean_title)
+
             # compute similarity between the current link and the target
-            target_similarity = self.nlp(title).similarity(self.target)
+            if self.target_token and self.target_token.vector_norm:
+                target_similarity = self.nlp(clean_title).similarity(self.target_token)
+            else:
+                target_similarity = SequenceMatcher(
+                    None, raw_title, self.TARGET
+                ).ratio()
 
             # push the similarity + link into the heap
             heappush(heap, (target_similarity, a))
@@ -282,21 +307,24 @@ if __name__ == "__main__":
     WikiRacer.custom_settings["LOG_FILE"] = config.LOG_FILE
 
     # start crawling
+    start_time = time.time()
     logger.info(f"Starting crawler with settings: {config}...")
     process = CrawlerProcess(settings=WikiRacer.custom_settings)
     process.crawl(WikiRacer, start=START, target=TARGET, config=config)
     process.start()
-    logger.info("Crawler finished.")
+
+    elapsed_time = time.time() - start_time
+    logger.info(f"Crawler finished in {elapsed_time} seconds.")
 
     if not WikiRacer.found:
         print("Could not find the target word.")
 
     else:
-        print("Successfully found the target word.")
+        print(f"Successfully found the target word in {elapsed_time} seconds.")
 
-    # sleep for a few seconds to see the final web page :)
-    # before closing it
-    time.sleep(5)
+        # sleep for a few seconds to see the final web page :)
+        # before closing it
+        time.sleep(3)
 
     # close the web driver if needed
     if WikiRacer.driver:
